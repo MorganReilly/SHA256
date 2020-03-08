@@ -5,12 +5,28 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <inttypes.h> // Includes formatters for printf
 
+// Preprocessing
+// Create union 512int blocks
+union block {
+    uint64_t sixfour[8];   // 64 * 8 = 512
+    uint32_t threetwo[16]; // 32 * 16 = 512
+    uint8_t eight[64];     // 8 * 64 = 512
+};
+
+// Represent current parse status
+enum flag
+{
+    READ, // Not EOF -- Read OG file
+    PAD0, // Pad with 0's
+    PAD1, // Read all to eof and fill block
+    FINISH
+};
+
+#pragma region CONSTANTS &FUNCTIONS
 // 32-bit constants -- Section 4.2.2
 const uint32_t K[] = {0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
-
-// Initial hash values -- Section 5.5.3
-uint32_t H[] = {0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0};
 
 // Choose
 uint32_t Ch(uint32_t x, uint32_t y, uint32_t z)
@@ -68,30 +84,148 @@ uint32_t sig1(uint32_t x)
     return ROTR(x, 17) ^ ROTR(x, 19) ^ SHR(x, 10);
 }
 
+uint64_t no_zeros_bytes(uint64_t no_bits)
+{
+    uint64_t result = 512 - (no_bits % 512ULL);
+
+    if (result < 65)
+    {
+        result += 512;
+    }
+
+    result -= 72;
+
+    return (result / 8ULL);
+}
+#pragma endregion
+
+// nextblock -- next hashing block
+// Read from infile, into M, keeping track of the number of bits it
+// has currently read
+int nextblock(union block *M, FILE *infile, uint64_t *nobits)
+{
+    uint8_t i;
+    // MAIN ALGORITHM LOOP
+    // Try read file 1 byte at a time..
+    // Read into b (& -> Address)
+    // Read 1 byte, read 1 copy of bytes, from inFile
+    for (*nobits = 0, i = 0; fread(&M.eight[i], 1, 1, infile) == 1; *nobits += 8)
+    {
+        printf("%02" PRIx8, &M.eight[i]);
+    }
+
+    printf("%02" PRIx8, 0x80); //Append Bits: 1000 0000
+
+    // PADDING TO BE DONE ON THE FLY
+    for (uint64_t i = (no_zeros_bytes(*nobits)); i > 0; i--)
+    {
+        printf("%02" PRIx8, 0x00);
+    }
+
+    printf("%016" PRIx64 "\n", *nobits); // Length of original message
+}
+
+// Taking a block M,
+// calculating next block H
+int nexthash(union block *M, uint32_t *H)
+{
+    // Section 6.2.2 -- Step 1/5
+    // message schedule
+    uint32_t W[64];
+    uint32_t a, b, c, d, e, f, g, h; // become what current H is
+    uint32_t T1, T2;
+
+    // first half
+    for (int t = 0; t < 16; t++)
+    {
+        W[t] = M->threetwo[t]; // deferencing the pointer
+    }
+
+    for (int t = 16; t < 64; t++)
+    {
+        sig1(W[t - 2]) + W[t - 7] + sig0(W[t - 15]) + W[t - 16];
+    }
+
+    // Step 2/5
+    a = H[0]; // Automatic deference of pointer
+    b = H[1];
+    c = H[2];
+    d = H[3];
+    e = H[4];
+    f = H[5];
+    g = H[6];
+    h = H[7];
+
+    // Step 3/5
+    for (int t = 0; t < 64; t++)
+    {
+        T1 = h + Sig1(e) + Ch(e, f, g) + K[t] + W[t];
+        T2 = Sig0(a) + Maj(a, b, c);
+        h = g;
+        g = f;
+        f = e;
+        e = d + T1;
+        d = c;
+        c = b;
+        b = a;
+        a = T1 + T2;
+
+        H[0] = a + H[0]; 
+        H[1] = b + H[1];
+        H[2] = c + H[2]; 
+        H[3] = d + H[3];
+        H[4] = e + H[4]; 
+        H[5] = f + H[5];
+        H[6] = g + H[6]; 
+        H[7] = h + H[7];
+    }
+}
+
 int main(int argc, char *argv[])
 {
+    // Expect command line arg
+    if (argc != 2)
+    {
+        printf("Error: expected single filename as argument\n");
+        return 1;
+    }
 
-    uint32_t x = 0x0f0f0f0f;
-    uint32_t y = 0xcccccccc;
-    uint32_t z = 0x55555555;
+    FILE *infile = fopen(argv[1], "rb");
 
-    printf("x            = %08x\n", x);
-    printf("y            = %08x\n", y);
-    printf("z            = %08x\n", z);
+    // Error handling -- Can't open file
+    if (!infile)
+    {
+        printf("Error: couldn't open file %s. \n", argv[1]);
+        return 1;
+    }
 
-    printf("Ch(x,y,z)    = %08x\n", Ch(x, y, z));
-    printf("Maj(x,y,z)   = %08x\n", Maj(x, y, z));
+    // Initial hash values -- Section 5.5.3
+    uint32_t H[] = {0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0};
 
-    printf("SHR(x,4)     = %08x\n", SHR(x, 4));
-    printf("ROTR(x,4)    = %08x\n", ROTR(x, 4));
+    // Current padded message block
+    union block M;
 
-    printf("Sig0(x)      = %08x\n", Sig0(x));
-    printf("Sig1(x)      = %08x\n", Sig1(x));
-    printf("sig0(x)      = %08x\n", sig0(x));
-    printf("sig1(x)      = %08x\n", sig1(x));
+    // nextblock params
+    union block M;
+    uint64_t nobits = 0;
+    enum flag status = READ;
+    // Read through all of the padded message blocks.
+    // When reading into the block -> Do in 8-bits
+    while (nextblock(&M, infile, nobits, status))
+    {
+        // Calculate next Hash value of M, hash value of H
+        // Passing as address
+        // Using values in array --> Do in 32-bits
+        nexthash(&M.threetwo, &H);
+    }
 
-    printf("K[20]        = %08x\n", K[0]);
-    printf("H[2]         = %08x\n", H[2]);
+    for (int i = 0; i < 8; i++)
+    {
+        printf("%02" PRIX32, H[i]);
+        printf("\n");
+    }
+
+    fclose(infile);
 
     return 0;
 }
