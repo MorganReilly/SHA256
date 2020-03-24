@@ -2,27 +2,32 @@
 // https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.180-4.pdf
 //
 // -- The Secure Hash Algorithm 256-bit version --
-
+#pragma region IMPORTS
 #include <stdio.h>
 #include <stdint.h>
 #include <inttypes.h> // Includes formatters for printf
+#pragma endregion
 
+#pragma region PREPROCESSING SETUP
 // Preprocessing
 // Create union 512int blocks
 union block {
-    uint64_t sixfour[8];   // 64 * 8 = 512
-    uint32_t threetwo[16]; // 32 * 16 = 512
-    uint8_t eight[64];     // 8 * 64 = 512
+    uint64_t sixfour[8];   // 64 * 8 = 512 -- 8 64bit intger array
+    uint32_t threetwo[16]; // 32 * 16 = 512 -- 16 32bit integer array
+    uint8_t eight[64];     // 8 * 64 = 512 -- 64 8bit integer array
 };
+#pragma endregion
 
+#pragma region PARSE STATUS
 // Represent current parse status
 enum flag
 {
     READ, // Not EOF -- Read OG file
     PAD0, // Pad with 0's
-    PAD1, // Read all to eof and fill block
+    // PAD1, // Read all to eof and fill block
     FINISH
 };
+#pragma endregion
 
 #pragma region CONSTANTS &FUNCTIONS
 // 32-bit constants -- Section 4.2.2
@@ -84,47 +89,116 @@ uint32_t sig1(uint32_t x)
     return ROTR(x, 17) ^ ROTR(x, 19) ^ SHR(x, 10);
 }
 
-uint64_t no_zeros_bytes(uint64_t no_bits)
-{
-    uint64_t result = 512 - (no_bits % 512ULL);
+// uint64_t no_zeros_bytes(uint64_t no_bits)
+// {
+//     uint64_t result = 512 - (no_bits % 512ULL);
 
-    if (result < 65)
-    {
-        result += 512;
-    }
+//     if (result < 65)
+//     {
+//         result += 512;
+//     }
 
-    result -= 72;
+//     result -= 72;
 
-    return (result / 8ULL);
-}
+//     return (result / 8ULL);
+// }
 #pragma endregion
 
+#pragma region NEXT BLOCK
 // nextblock -- next hashing block
 // Read from infile, into M, keeping track of the number of bits it
 // has currently read
-int nextblock(union block *M, FILE *infile, uint64_t *nobits)
+int nextblock(union block *M, FILE *infile, uint64_t *nobits, enum flag *status)
 {
-    uint8_t i;
-    // MAIN ALGORITHM LOOP
-    // Try read file 1 byte at a time..
-    // Read into b (& -> Address)
-    // Read 1 byte, read 1 copy of bytes, from inFile
-    for (*nobits = 0, i = 0; fread(&M.eight[i], 1, 1, infile) == 1; *nobits += 8)
+    // check current status
+    if (*status == FINISH)
+        return 0; // this will break out of while in main
+
+    // otherwise not on finish -- check status
+    // if (*status == PAD1){
+    //     // send block back that contains all 0s except for last 64 bits should be nobits in big endian integer
+
+    //     M.eight[0] = 0x80; // set first byte set, last 7 unset
+
+    //     // 56 --> First 8 bits set above
+    //     for(int i =1; i<56; i++){
+    //         M.eight[i] = 0; // Set all bits in unsigned integer to 0
+    //     }
+    //     M.sixfour[7] = *nobits; // set last byte
+    //     // set status to finish
+    //     *status = FINISH;
+    //     return 1;
+    // }
+
+    // Need to check if it's a 0 block
+    if (*status == PAD0)
     {
-        printf("%02" PRIx8, &M.eight[i]);
+        for (int i = 0; i < 56; i++)
+        {
+            M->eight[i] = 0;
+        }
+        M->sixfour[7] = *nobits;
+        *status = FINISH;
+        return 1;
     }
 
-    printf("%02" PRIx8, 0x80); //Append Bits: 1000 0000
+    // assume nobits set to 0 -- start by default?
+    size_t nobytesread = fread(M->eight, 1, 64, infile); // read into 8bit message block, 1byte, 64times, filehandler
 
-    // PADDING TO BE DONE ON THE FLY
-    for (uint64_t i = (no_zeros_bytes(*nobits)); i > 0; i--)
+    // Try to read 64 bytes from file
+    if (nobytesread == 64)
     {
-        printf("%02" PRIx8, 0x00);
+        return 1;
+    }
+    // check now if theres enough room left in block to do all padding
+    // need 8 bytes for a 64 bit integer and a byte to stick 1 into.
+
+    // if we can fit all padding in last block:
+    if (nobytesread < 56)
+    {
+        M->eight[nobytesread] = 0x80; // will be position of where to put 1 bit in byte
+        for (int i = nobytesread + 1; i < 56; i++)
+        {
+            M->eight[i] = 0;
+        }
+        M->sixfour[7] = *nobits;
+        *status = FINISH;
+        return 1;
     }
 
-    printf("%016" PRIx64 "\n", *nobits); // Length of original message
+    // Otherwise have read at least 56(inclusive) bytes from file, but less than 64(exculsive) --> Need to padd with 0's
+    M->eight[nobytesread] = 0x80;
+    for (int i = nobytesread + 1; i < 64; i++)
+    {
+        M->eight[i] = 0;
+    }
+    *status = PAD0;
+    return 1;
+
+    // uint8_t i;
+
+    // // MAIN ALGORITHM LOOP
+    // // Try read file 1 byte at a time..
+    // // Read into b (& -> Address)
+    // // Read 1 byte, read 1 copy of bytes, from inFile
+    // for (*nobits = 0, i = 0; fread(&M.eight[i], 1, 1, infile) == 1; *nobits += 8)
+    // {
+    //     printf("%02" PRIx8, &M.eight[i]);
+    // }
+
+    // printf("%02" PRIx8, 0x80); //Append Bits: 1000 0000
+
+    // // PADDING TO BE DONE ON THE FLY
+    // for (uint64_t i = (no_zeros_bytes(*nobits)); i > 0; i--)
+    // {
+    //     printf("%02" PRIx8, 0x00);
+    // }
+
+    // printf("%016" PRIx64 "\n", *nobits); // Length of original message
 }
+#pragma endregion
 
+#pragma region NEXT HASH
 // Taking a block M,
 // calculating next block H
 int nexthash(union block *M, uint32_t *H)
@@ -170,17 +244,19 @@ int nexthash(union block *M, uint32_t *H)
         b = a;
         a = T1 + T2;
 
-        H[0] = a + H[0]; 
+        H[0] = a + H[0];
         H[1] = b + H[1];
-        H[2] = c + H[2]; 
+        H[2] = c + H[2];
         H[3] = d + H[3];
-        H[4] = e + H[4]; 
+        H[4] = e + H[4];
         H[5] = f + H[5];
-        H[6] = g + H[6]; 
+        H[6] = g + H[6];
         H[7] = h + H[7];
     }
 }
+#pragma endregion
 
+#pragma region MAIN
 int main(int argc, char *argv[])
 {
     // Expect command line arg
@@ -202,21 +278,18 @@ int main(int argc, char *argv[])
     // Initial hash values -- Section 5.5.3
     uint32_t H[] = {0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0};
 
-    // Current padded message block
-    union block M;
-
     // nextblock params
     union block M;
     uint64_t nobits = 0;
     enum flag status = READ;
     // Read through all of the padded message blocks.
     // When reading into the block -> Do in 8-bits
-    while (nextblock(&M, infile, nobits, status))
+    while (nextblock(&M, infile, &nobits, &status))
     {
         // Calculate next Hash value of M, hash value of H
         // Passing as address
         // Using values in array --> Do in 32-bits
-        nexthash(&M.threetwo, &H);
+        nexthash(&M, H);
     }
 
     for (int i = 0; i < 8; i++)
@@ -229,3 +302,4 @@ int main(int argc, char *argv[])
 
     return 0;
 }
+#pragma endregion
