@@ -199,8 +199,8 @@ int nextblock(union block *M, FILE *infile, uint64_t *nobits, enum flag *status)
 #pragma endregion
 
 #pragma region NEXT HASH
-// Taking a block M,
-// calculating next block H
+// Taking a block M, and previous hash H
+// calculating next hash block H
 int nexthash(union block *M, uint32_t *H)
 {
     // Section 6.2.2 -- Step 1/5
@@ -294,7 +294,7 @@ int main(int argc, char *argv[])
 
     for (int i = 0; i < 8; i++)
     {
-        printf("%02" PRIX32, H[i]);
+        printf("%02" PRIx32, H[i]);
         printf("\n");
     }
 
